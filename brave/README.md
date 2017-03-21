@@ -230,6 +230,8 @@ span = contextOrFlags.context() != null
     : tracer.newTrace(contextOrFlags.samplingFlags());
 ```
 
+## Current Span
+
 ## Performance
 Brave has been built with performance in mind. Using the core Span api,
 you can record spans in sub-microseconds. When a span is sampled, there's
@@ -359,6 +361,20 @@ context from a carrier. While naming is similar, Brave optimizes for
 direct integration with carrier types (such as http request) vs routing
 through an intermediate (such as a map). Brave also considers propagation
 a separate api from the tracer.
+
+
+### SpanScoper Api
+The first design of `CurrentTraceContext` was borrowed from `ContextUtils`
+in Google's [instrumentation-java](https://github.com/google/instrumentation-java) project.
+This was possible because of high collaboration between the projects and
+an almost identical goal. Slight departures including naming (which prefers
+Guice's naming conventions), and that the object scoped is a TraceContext
+vs a Span.
+
+Propagating a trace context instead of a span is a right fit for several reasons:
+* `TraceContext` can be created without a reference to a tracer
+* Common tasks like making child spans and staining log context only need the context
+* Brave's recorder is keyed on context, so there's no feature loss in this choice
 
 ### Public namespace
 Brave 4's pubic namespace is more defensive that the past, using a package

@@ -147,4 +147,37 @@ public class TracerTest {
     assertThat(tracer.newChild(unsampled))
         .isInstanceOf(NoopSpan.class);
   }
+
+  @Test public void currentSpan_defaultsToNull() {
+    assertThat(tracer.currentSpan()).isNull();
+  }
+
+  @Test public void withSpan() {
+    Span current = tracer.newTrace();
+
+    try (Tracer.SpanInScope ws = tracer.withSpanInScope(current)) {
+      assertThat(tracer.currentSpan())
+          .isEqualTo(current);
+    }
+
+    // context was cleared
+    assertThat(tracer.currentSpan()).isNull();
+  }
+
+  @Test public void withSpan_nested() {
+    Span parent = tracer.newTrace();
+
+    try (Tracer.SpanInScope wsParent = tracer.withSpanInScope(parent)) {
+
+      Span child = tracer.newChild(parent.context());
+      try (Tracer.SpanInScope wsChild = tracer.withSpanInScope(child)) {
+        assertThat(tracer.currentSpan())
+            .isEqualTo(child);
+      }
+
+      // old parent reverted
+      assertThat(tracer.currentSpan())
+          .isEqualTo(parent);
+    }
+  }
 }

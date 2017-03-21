@@ -4,15 +4,19 @@ import brave.internal.Internal;
 import brave.internal.Nullable;
 import brave.internal.Platform;
 import brave.internal.recorder.Recorder;
+import brave.propagation.CurrentTraceContext;
 import brave.propagation.Propagation;
 import brave.propagation.SamplingFlags;
 import brave.propagation.TraceContext;
 import brave.propagation.TraceContextOrSamplingFlags;
 import brave.sampler.Sampler;
+import java.io.Closeable;
 import zipkin.Endpoint;
 import zipkin.reporter.AsyncReporter;
 import zipkin.reporter.Reporter;
 import zipkin.reporter.Sender;
+
+import static zipkin.internal.Util.checkNotNull;
 
 /**
  * Using a tracer, you can create a root span capturing the critical path of a request. Child
@@ -53,6 +57,7 @@ public final class Tracer {
     Reporter<zipkin.Span> reporter;
     Clock clock;
     Sampler sampler = Sampler.ALWAYS_SAMPLE;
+    CurrentTraceContext currentTraceContext = new CurrentTraceContext.Default();
     boolean traceId128Bit = false;
 
     /**
@@ -116,6 +121,16 @@ public final class Tracer {
       return this;
     }
 
+    /**
+     * Responsible for implementing {@link Tracer#currentSpan()} and {@link Tracer#withSpanInScope(Span)}.
+     * By default a simple thread-local is used. Override to support other mechanisms or to
+     * synchronize with other mechanisms such as SLF4J's MDC.
+     */
+    public Builder spanScoper(CurrentTraceContext currentTraceContext) {
+      this.currentTraceContext = currentTraceContext;
+      return this;
+    }
+
     /** When true, new root spans will have 128-bit trace IDs. Defaults to false (64-bit) */
     public Builder traceId128Bit(boolean traceId128Bit) {
       this.traceId128Bit = traceId128Bit;
@@ -147,6 +162,7 @@ public final class Tracer {
   final Endpoint localEndpoint;
   final Recorder recorder;
   final Sampler sampler;
+  final CurrentTraceContext currentTraceContext;
   final boolean traceId128Bit;
 
   Tracer(Builder builder) {
@@ -154,6 +170,7 @@ public final class Tracer {
     this.localEndpoint = builder.localEndpoint;
     this.recorder = new Recorder(localEndpoint, clock, builder.reporter);
     this.sampler = builder.sampler;
+    this.currentTraceContext = builder.currentTraceContext;
     this.traceId128Bit = builder.traceId128Bit;
   }
 
@@ -220,10 +237,10 @@ public final class Tracer {
   /** Converts the context as-is to a Span object */
   public Span toSpan(TraceContext context) {
     if (context == null) throw new NullPointerException("context == null");
-    if (context.sampled()) {
-      return new RealSpan(context, clock, recorder);
+    if (context.sampled() == null || context.sampled()) {
+      return RealSpan.create(context, clock, recorder);
     }
-    return new NoopSpan(context);
+    return NoopSpan.create(context);
   }
 
   /**
@@ -233,7 +250,7 @@ public final class Tracer {
   public Span newChild(TraceContext parent) {
     if (parent == null) throw new NullPointerException("parent == null");
     if (Boolean.FALSE.equals(parent.sampled())) {
-      return new NoopSpan(parent);
+      return NoopSpan.create(parent);
     }
     return ensureSampled(nextContext(parent, parent));
   }
@@ -260,5 +277,65 @@ public final class Tracer {
         .traceIdHigh(traceId128Bit ? Platform.get().randomLong() : 0L)
         .traceId(nextId)
         .spanId(nextId).build();
+  }
+
+  /**
+   * Makes the given span the "current span" and returns an object that exits that scope on close.
+   * The span provided will be returned by {@link #currentSpan()} until the return value is closed.
+   *
+   * <p>The most convenient way to use this method is via the try-with-resources idiom.
+   *
+   * Ex.
+   * <pre>{@code
+   * // Assume a framework interceptor uses this method to set the inbound span as current
+   * try (SpanInScope ws = tracer.withSpanInScope(span)) {
+   *   return inboundRequest.invoke();
+   * } finally {
+   *   span.finish();
+   * }
+   *
+   * // An unrelated framework interceptor can now lookup the correct parent for an outbound
+   * request
+   * Span parent = tracer.currentSpan()
+   * Span span = tracer.nextSpan().name("outbound").start(); // parent is implicitly looked up
+   * try (SpanInScope ws = tracer.withSpanInScope(span)) {
+   *   return outboundRequest.invoke();
+   * } finally {
+   *   span.finish();
+   * }
+   * }</pre>
+   *
+   * <p>Note: While downstream code might affect the span, calling this method, and calling close on
+   * the result have no effect on the input. For example, calling close on the result does not
+   * finish the span. Not only is it safe to call close, you must call close to end the scope, or
+   * risk leaking resources associated with the scope.
+   */
+  public SpanInScope withSpanInScope(Span span) {
+    return new SpanInScope(currentTraceContext.newScope(span.context()));
+  }
+
+  /** Returns the current span in scope or null if there isn't one. */
+  @Nullable public Span currentSpan() {
+    TraceContext currentContext = currentTraceContext.get();
+    return currentContext != null ? toSpan(currentContext) : null;
+  }
+
+  /** A span remains in the scope it was bound to until close is called. */
+  public static final class SpanInScope implements Closeable {
+    final CurrentTraceContext.Scope delegate;
+
+    // This type hides the SPI type and allows us to double-check the SPI didn't return null.
+    SpanInScope(CurrentTraceContext.Scope delegate) {
+      this.delegate = checkNotNull(delegate, "delegate");
+    }
+
+    /** No exceptions are thrown when unbinding a span scope. */
+    @Override public void close() {
+      delegate.close();
+    }
+
+    @Override public String toString() {
+      return delegate.toString();
+    }
   }
 }
