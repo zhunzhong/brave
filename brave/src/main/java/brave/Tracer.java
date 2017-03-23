@@ -122,9 +122,9 @@ public final class Tracer {
     }
 
     /**
-     * Responsible for implementing {@link Tracer#currentSpan()} and {@link Tracer#withSpanInScope(Span)}.
-     * By default a simple thread-local is used. Override to support other mechanisms or to
-     * synchronize with other mechanisms such as SLF4J's MDC.
+     * Responsible for implementing {@link Tracer#currentSpan()} and {@link
+     * Tracer#withSpanInScope(Span)}. By default a simple thread-local is used. Override to support
+     * other mechanisms or to synchronize with other mechanisms such as SLF4J's MDC.
      */
     public Builder spanScoper(CurrentTraceContext currentTraceContext) {
       this.currentTraceContext = currentTraceContext;
@@ -318,6 +318,12 @@ public final class Tracer {
   @Nullable public Span currentSpan() {
     TraceContext currentContext = currentTraceContext.get();
     return currentContext != null ? toSpan(currentContext) : null;
+  }
+
+  /** Returns a new child span if there's a {@link #currentSpan()} or a new trace if there isn't. */
+  @Nullable public Span nextSpan() {
+    TraceContext parent = currentTraceContext.get();
+    return parent == null ? newTrace() : newChild(parent);
   }
 
   /** A span remains in the scope it was bound to until close is called. */

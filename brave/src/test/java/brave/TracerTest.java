@@ -152,7 +152,20 @@ public class TracerTest {
     assertThat(tracer.currentSpan()).isNull();
   }
 
-  @Test public void withSpan() {
+  @Test public void nextSpan_defaultsToMakeNewTrace() {
+    assertThat(tracer.nextSpan().context().parentId()).isNull();
+  }
+
+  @Test public void nextSpan_makesChildOfCurrent() {
+    Span parent = tracer.newTrace();
+
+    try (Tracer.SpanInScope ws = tracer.withSpanInScope(parent)) {
+      assertThat(tracer.nextSpan().context().parentId())
+          .isEqualTo(parent.context().spanId());
+    }
+  }
+
+  @Test public void withSpanInScope() {
     Span current = tracer.newTrace();
 
     try (Tracer.SpanInScope ws = tracer.withSpanInScope(current)) {
@@ -164,7 +177,7 @@ public class TracerTest {
     assertThat(tracer.currentSpan()).isNull();
   }
 
-  @Test public void withSpan_nested() {
+  @Test public void withSpanInScope_nested() {
     Span parent = tracer.newTrace();
 
     try (Tracer.SpanInScope wsParent = tracer.withSpanInScope(parent)) {
